@@ -203,13 +203,18 @@ def test_precedence(launcher):
     """命令行 > 配置文件 > 出厂常量；且「没给过」要与「显式给了值」区分开。"""
     args, cfg = launcher.parse_args([])
     assert args.port == get(cfg, "server.port") and args.ik == get(cfg, "tuning.ik")
-    assert args.upright == get(cfg, "robot.upright")
-    print("[6] 不给命令行 → 全部取自 config/teleop.yaml（port=%r ik=%r）"
-          % (args.port, args.ik))
+    assert args.side is True and args.upright is False
+    print("[6] 不给命令行 → 全部取自 config/teleop.yaml（port=%r ik=%r side=%r）"
+          % (args.port, args.ik, args.side))
+
+    args, _ = launcher.parse_args(["--upright"])
+    assert args.dual is False and args.upright is True and args.side is False
+    args, _ = launcher.parse_args(["--no-side"])
+    assert args.dual is False and args.side is False
 
     args, _ = launcher.parse_args(["--port", "9000", "--ik", "exact", "--dual"])
     assert args.port == 9000 and args.ik == "exact" and args.dual is True
-    print("[7] 命令行显式项覆盖配置文件（port=9000 ik=exact dual=True）")
+    print("[7] 命令行显式项覆盖配置文件（含 --upright / --no-side 单臂正装入口）")
 
     # 改一份配置文件的临时副本，验证「配置文件能压过出厂常量」
     import tempfile
@@ -287,6 +292,8 @@ def test_launcher_argv_accepted_by_server(launcher):
     # 覆盖到每一种分支：三种构型、base_link 坐标系带符号、真机与两个远端执行器
     cases = [
         ([], False, False),
+        (["--upright"], False, False),
+        (["--no-side"], False, False),
         (["--dual", "--viewer", "rviz", "--ik", "exact"], True, True),
         (["--dual", "--upright"], False, False),
         (["--real", "--hand", "--hand-remote", "10.0.0.5:9004",
@@ -318,6 +325,7 @@ def test_launcher_argv_accepted_by_server(launcher):
             == parse_endpoints(args.zenoh_listen)
         assert bool(getattr(parsed, "dual", False)) == args.dual
         assert bool(getattr(parsed, "upright", False)) == args.upright
+        assert bool(getattr(parsed, "side", False)) == args.side
         assert parsed.ik == args.ik
         assert parsed.config == args.config
         # 开关是**显式**传的：服务端不该有「配置说开、其实没准备好」的机会

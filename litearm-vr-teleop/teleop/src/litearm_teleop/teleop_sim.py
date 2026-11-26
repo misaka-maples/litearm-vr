@@ -336,8 +336,8 @@ class Tuning:
         defaults = dict(input_timeout=1.0, feedback_timeout=0.5,
                         max_position_error=0.3, max_rotation_error=1.5,
                         stall_timeout=5.0, position_tolerance=0.001,
-                        rotation_tolerance=0.01, max_joint_velocity=2.0,
-                        max_joint_acceleration=12.0, max_linear_velocity=1.5,
+                        rotation_tolerance=0.01, max_joint_velocity=6.0,
+                        max_joint_acceleration=60.0, max_linear_velocity=1.5,
                         max_angular_velocity=8.0, hand_jump_position=0.15,
                         hand_jump_rotation=0.8)
         for key, value in (tracking or {}).items():
@@ -689,71 +689,54 @@ class ArmVisualMarker:
         if not self._is_gui:
             return
         now = time.monotonic()
-        draw_geom = force or now - self._last_geom >= self.GEOM_INTERVAL
-        draw_text = force or now - self._last_text >= self.TEXT_INTERVAL
-        if not (draw_geom or draw_text):
-            return
-        if draw_geom:
+        draw_lines = force or now - self._last_geom >= self.GEOM_INTERVAL
+        if draw_lines:
             self._last_geom = now
-        if draw_text:
-            self._last_text = now
         self._ensure_visual_bodies()
         try:
             cur_p = np.asarray(cur_tcp, dtype=float)
             cur_rot = np.asarray(cur_R, dtype=float)
             cur_quat = R.from_matrix(cur_rot).as_quat()
 
-            # 1. End-Effector (TCP) sphere
-            if draw_geom and self._mb_ee is not None:
+            # 1. End-Effector (TCP) sphere: resetBasePositionAndOrientation is ~4us,
+            # so update every tick for smooth 60Hz visual feedback without IPC stalls.
+            if self._mb_ee is not None:
                 p.resetBasePositionAndOrientation(
                     self._mb_ee, cur_p.tolist(), cur_quat.tolist(),
                     physicsClientId=self._cid)
 
-            # 2. End-Effector RGB axes (X=Red, Y=Green, Z=Blue)
+            # 2. End-Effector RGB axes (X=Red, Y=Green, Z=Blue) — throttled because
+            # addUserDebugLine is synchronous GUI IPC (~10ms). Avoid addUserDebugText
+            # in the hot loop (~36ms mesh rebuild stalls and X11 timeout risk).
             axis_len = 0.07
             colors_ee = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.3, 1.0]]
-            if draw_geom:
+            if draw_lines:
                 for i in range(3):
                     end_pt = cur_p + cur_rot[:, i] * axis_len
                     self._lines_ee[i] = p.addUserDebugLine(
                         cur_p.tolist(), end_pt.tolist(), colors_ee[i], lineWidth=3.5,
                         replaceItemUniqueId=self._lines_ee[i], physicsClientId=self._cid)
 
-            # 3. End-Effector text label
-            if draw_text:
-                self._text_ee = p.addUserDebugText(
-                    "[%s] TCP" % self.name, (cur_p + np.array([0, 0, 0.025])).tolist(),
-                    textColorRGB=[0.0, 0.9, 0.2], textSize=0.85,
-                    replaceItemUniqueId=self._text_ee, physicsClientId=self._cid)
-
-            # 4. Target Marker (if target given)
+            # 3. Target Marker (if target given)
             if tgt_tcp is not None and tgt_R is not None:
                 tgt_p = np.asarray(tgt_tcp, dtype=float)
                 tgt_rot = np.asarray(tgt_R, dtype=float)
                 tgt_quat = R.from_matrix(tgt_rot).as_quat()
 
-                if draw_geom and self._mb_tgt is not None:
+                if self._mb_tgt is not None:
                     p.resetBasePositionAndOrientation(
                         self._mb_tgt, tgt_p.tolist(), tgt_quat.tolist(),
                         physicsClientId=self._cid)
 
                 colors_tgt = [[1.0, 0.4, 0.1], [0.4, 1.0, 0.1], [0.1, 0.7, 1.0]]
-                if draw_geom:
+                if draw_lines:
                     for i in range(3):
                         end_tgt = tgt_p + tgt_rot[:, i] * axis_len
                         self._lines_tgt[i] = p.addUserDebugLine(
                             tgt_p.tolist(), end_tgt.tolist(), colors_tgt[i], lineWidth=2.5,
                             replaceItemUniqueId=self._lines_tgt[i], physicsClientId=self._cid)
 
-                if draw_text:
-                    lbl = "[%s] Target" % self.name if active else "[%s] Target (Hold)" % self.name
-                    self._text_tgt = p.addUserDebugText(
-                        lbl, (tgt_p + np.array([0, 0, 0.025])).tolist(),
-                        textColorRGB=[1.0, 0.6, 0.0], textSize=0.85,
-                        replaceItemUniqueId=self._text_tgt, physicsClientId=self._cid)
-
-                # Tracking error line
-                if draw_geom:
+                    # Tracking error line
                     dist = float(np.linalg.norm(tgt_p - cur_p))
                     if dist > 0.002:
                         self._line_err = p.addUserDebugLine(
@@ -763,7 +746,7 @@ class ArmVisualMarker:
                         self._line_err = p.addUserDebugLine(
                             cur_p.tolist(), cur_p.tolist(), [1.0, 0.85, 0.0], lineWidth=0.1,
                             replaceItemUniqueId=self._line_err, physicsClientId=self._cid)
-            elif draw_geom and self._mb_tgt is not None:
+            elif self._mb_tgt is not None:
                 p.resetBasePositionAndOrientation(
                     self._mb_tgt, [0, 0, -10], [0, 0, 0, 1], physicsClientId=self._cid)
         except Exception:
@@ -1004,26 +987,19 @@ class Arm:
         n_all = len(self._all_rev_ids)
         cur_all = np.array([p.getJointState(self._robot, j, physicsClientId=self._cid)[0]
                             for j in self._all_rev_ids])
-        lo = [0.0] * n_all
-        up = [0.0] * n_all
+        lo = list(cur_all)
+        up = list(cur_all)
         ranges = [0.0] * n_all
-        rest = [0.0] * n_all
-        for k, j in enumerate(self._all_rev_ids):
-            if k in self._ik_index:
-                # ⚠ 别叫 `info` —— 它会遮蔽本方法的 `info` 形参（诊断回填用）。
-                jinfo = p.getJointInfo(self._robot, j, physicsClientId=self._cid)
-                lo[k] = jinfo[8]
-                up[k] = jinfo[9]
-                ranges[k] = up[k] - lo[k]
-                rest[k] = cur_all[k]
-            else:
-                # 锁死其它关节（另一臂）：上下限都 = 当前值
-                lo[k] = cur_all[k]
-                up[k] = cur_all[k]
-                ranges[k] = 0.0
-                rest[k] = cur_all[k]
+        rest = list(cur_all)
+        for local_i, k in enumerate(self._ik_index):
+            lo[k] = float(self._lower[local_i])
+            up[k] = float(self._upper[local_i])
+            ranges[k] = up[k] - lo[k]
 
         quat_d = R.from_matrix(R_d).as_quat()
+        # PyBullet's residualThreshold only checks position error, not orientation:
+        # 1e-4 exits after 1 iteration on pure rotations (causing >30mm TCP drift).
+        # 1e-9 forces orientation convergence as well (~1ms per solve).
         q_all = np.asarray(p.calculateInverseKinematics(
             self._robot, self._ee_link,
             targetPosition=list(np.asarray(pos_d, float)),
@@ -1034,7 +1010,7 @@ class Arm:
             restPoses=rest,
             jointDamping=[0.01] * n_all,
             maxNumIterations=200,
-            residualThreshold=1e-4,
+            residualThreshold=1e-9,
             physicsClientId=self._cid), float)
         # 取本臂的 7 维解
         q_tgt = q_all[self._ik_index]
@@ -1323,20 +1299,26 @@ class Arm:
         else:
             self._step_pybullet(step_p, step_R, dt)
         candidate = self._get_q()
-        # 所有后端共享实际控制周期的速度/加速度约束。
-        delta = candidate-self._command_q
+        # 所有后端共享实际控制周期的速度/加速度约束（按最慢轴等比例缩放，保持笛卡尔路径协同）。
+        delta = candidate - self._command_q
         accel = cfg["max_joint_acceleration"]
+        v_des = delta / dt
         # The candidate is one rate-limited step, not a stop waypoint. Estimate
         # distance to the complete target for braking; near the endpoint the
         # fraction is 1 and this is the original finite-target stopping rule.
         remaining = np.abs(delta) / max(step_fraction, 1e-12)
-        braking = np.sqrt((accel*dt)**2 + 2*accel*remaining)-accel*dt
-        speed = np.minimum(np.abs(delta)/dt, braking)
-        velocity = np.sign(delta)*np.minimum(speed, cfg["max_joint_velocity"])
-        velocity = np.clip(velocity, self._command_velocity-accel*dt,
-                           self._command_velocity+accel*dt)
-        q_new = np.clip(self._command_q+velocity*dt, self._lower, self._upper)
-        self._command_velocity = (q_new-self._command_q)/dt
+        braking = np.sqrt((accel * dt) ** 2 + 2.0 * accel * remaining) - accel * dt
+        cap = np.minimum(braking, cfg["max_joint_velocity"])
+        abs_v = np.abs(v_des)
+        ratios = np.where(abs_v > 1e-12, cap / np.maximum(abs_v, 1e-12), 1.0)
+        v_target = v_des * min(1.0, float(np.min(ratios)))
+        dv = v_target - self._command_velocity
+        max_dv = float(np.max(np.abs(dv)))
+        if max_dv > accel * dt:
+            dv = dv * (accel * dt / max_dv)
+        velocity = self._command_velocity + dv
+        q_new = np.clip(self._command_q + velocity * dt, self._lower, self._upper)
+        self._command_velocity = (q_new - self._command_q) / dt
         self._command_q = q_new
         self._set_q(q_new)
         self._last_ik_info.update(position_error=ep, rotation_error=er,
@@ -1601,15 +1583,24 @@ class LiteArmTeleopSim:
         self._tuning = tuning if tuning is not None else Tuning()
         self._cfg = sim_config if sim_config is not None else SimConfig()
         self._probe = probe
+        # 单臂模式下 upright=True 显式选择单臂正装（覆盖 side=True）
+        effective_side = bool(side) and not bool(upright)
+        is_side_mount = (dual and not upright) or (not dual and effective_side)
         if viewer == "rviz":
             self._cid = p.connect(p.DIRECT)
         else:
-            # pybullet GUI 窗口
+            # pybullet GUI 窗口：相机朝向按构型与臂伸展方向对齐
+            #   侧装（单/双臂）臂沿 +X 伸展 → yaw=-90（屏幕右=-Y，屏幕深处=+X）
+            #   正装（单/双臂）臂沿 +Y 伸展 → yaw=0  （屏幕右=+X，屏幕深处=+Y）
             self._cid = p.connect(p.GUI)
             p.configureDebugVisualizer(
                 p.COV_ENABLE_GUI, 0, physicsClientId=self._cid)
-            p.resetDebugVisualizerCamera(
-                1.02, -90, 12, [0, 0.3, 0.35], physicsClientId=self._cid)
+            if is_side_mount:
+                p.resetDebugVisualizerCamera(
+                    1.02, -90, -15, [0.25, 0.0, 0.10], physicsClientId=self._cid)
+            else:
+                p.resetDebugVisualizerCamera(
+                    1.02, 0, -15, [0.0, 0.20, 0.35], physicsClientId=self._cid)
             print("pybullet GUI launched (PC window)")
 
         # ---- 机器人 ----
@@ -1665,7 +1656,7 @@ class LiteArmTeleopSim:
                                       tuning=self._tuning, probe=self._probe,
                                       sim_config=self._cfg)
         else:
-            urdf_path = SIDE_URDF_PATH if side else URDF_PATH
+            urdf_path = SIDE_URDF_PATH if effective_side else URDF_PATH
             robot_id = _load_urdf_with_mesh(self._cid, urdf_path,
                                             SINGLE_MESH_PKG,
                                             SINGLE_MESH_DIR)
@@ -1676,11 +1667,11 @@ class LiteArmTeleopSim:
             # home=single_q_home、映射复用单臂正装基准 translation_remap
             # （不能复用双臂侧装那组——那是水平侧装基准，与竖直正装朝向差 90°）。
             # 单臂 URDF 命名 joint1~7 / ee_link。
-            arm_side = "left" if side else "right"
-            home = self._cfg.q_home if side else self._cfg.single_q_home
+            arm_side = "left" if effective_side else "right"
+            home = self._cfg.q_home if effective_side else self._cfg.single_q_home
             self._arms[arm_side] = Arm(
                 self._cid, robot_id, arm_side,
-                self._cfg.arm_mapping(arm_side, dual=False, side=side),
+                self._cfg.arm_mapping(arm_side, dual=False, side=effective_side),
                 prefix="",
                 joint_stem="joint", ee_link_name="ee_link",
                 home=home, ik_backend=ik_backend,
@@ -1690,8 +1681,9 @@ class LiteArmTeleopSim:
                 sim_config=self._cfg,
                 all_joint_names=["joint%d" % k for k in range(1, 8)])
 
-        self.name = ("DualLiteArmUpright_Sim" if upright
-                     else ("DualLiteArm_Sim" if dual else "LiteArm_Sim"))
+        self.name = ("DualLiteArmUpright_Sim" if (dual and upright)
+                     else ("DualLiteArm_Sim" if dual
+                           else ("LiteArmSide_Sim" if effective_side else "LiteArm_Sim")))
         if np.any(self._tcp_offset):
             print("末端偏移量 tcp_offset = %s m（本体系：控制该工具点而非法兰）"
                   % np.array2string(self._tcp_offset, precision=4))
@@ -1815,10 +1807,10 @@ class LiteArmTeleopSim:
 
     # ---------- 便捷访问（测试用） ----------
     def __getattr__(self, name):
-        """把底层方法/属性透传到默认（right）臂，保持旧单臂测试 API 不变。"""
+        """把底层方法/属性透传到默认（right 或唯一单臂），保持旧单臂测试 API 不变。"""
         arms = self.__dict__.get("_arms")
         if arms:
-            arm = arms.get("right")
+            arm = arms.get("right") or next(iter(arms.values()), None)
             if arm is not None and hasattr(arm, name):
                 return getattr(arm, name)
         raise AttributeError(name)
@@ -1848,14 +1840,16 @@ def main():
     ap = argparse.ArgumentParser(description="LiteArm pybullet 遥操仿真（无 zenoh）")
     ap.add_argument("--config", default=None, metavar="PATH",
                     help="配置文件（默认 config/teleop.yaml）；命令行显式给的项更优先")
-    ap.add_argument("--dual", action="store_true", default=argparse.SUPPRESS,
-                    help="加载双臂 URDF（默认单臂正装）；配 --upright 为双臂正装")
-    ap.add_argument("--upright", action="store_true", default=argparse.SUPPRESS,
-                    help="--dual 时加载双臂正装 URDF（两只独立竖直臂、无立柱）；"
-                         "不传则双臂侧装立柱")
-    ap.add_argument("--side", action="store_true", default=argparse.SUPPRESS,
-                    help="单臂侧装 = 单左臂（左手柄驱动、home/映射取双臂侧装左臂，"
-                         "真机走 :9001）")
+    ap.add_argument("--dual", action=argparse.BooleanOptionalAction,
+                    default=argparse.SUPPRESS,
+                    help="加载双臂 URDF（默认单臂侧装）；配 --upright 为双臂正装")
+    ap.add_argument("--upright", action=argparse.BooleanOptionalAction,
+                    default=argparse.SUPPRESS,
+                    help="正装模式（单臂=单臂正装/右手柄；配 --dual=双臂正装无立柱）")
+    ap.add_argument("--side", action=argparse.BooleanOptionalAction,
+                    default=argparse.SUPPRESS,
+                    help="单臂侧装 = 单左臂（默认开启；左手柄驱动、真机走 :9001；"
+                         "传 --no-side 或 --upright 切单臂正装）")
     ap.add_argument("--viewer", choices=["gui", "rviz"], default=argparse.SUPPRESS,
                     help="显示后端：gui=pybullet 窗口（默认）/ rviz=RViz2")
     ap.add_argument("--ik", choices=["pin", "pybullet", "exact"],
@@ -1910,11 +1904,18 @@ def main():
             set_path(cfg_data, path, getattr(args, key))
     print("[配置] %s" % (args.config or DEFAULT_PATH))
 
+    dual = getattr(args, "dual", bool(get(cfg_data, "robot.dual", False)))
+    upright = getattr(args, "upright", bool(get(cfg_data, "robot.upright", False)))
+    side = getattr(args, "side", bool(get(cfg_data, "robot.side", True)))
+    if not dual:
+        if getattr(args, "upright", None) is True and not hasattr(args, "side"):
+            side = False
+        elif getattr(args, "side", None) is True and not hasattr(args, "upright"):
+            upright = False
     sim = LiteArmTeleopSim(
-        dual=getattr(args, "dual", bool(get(cfg_data, "robot.dual", False))),
-        side=getattr(args, "side", bool(get(cfg_data, "robot.side", False))),
-        upright=getattr(args, "upright",
-                        bool(get(cfg_data, "robot.upright", False))),
+        dual=dual,
+        side=side,
+        upright=upright,
         viewer=getattr(args, "viewer", get(cfg_data, "robot.viewer", "gui")),
         ik_backend=getattr(args, "ik", get(cfg_data, "tuning.ik", "pybullet")),
         tcp_offset=getattr(args, "tcp_offset",

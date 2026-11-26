@@ -309,7 +309,7 @@ OPTION_PATHS = {
     "port": ("server.port", 8765),
     "dual": ("robot.dual", False),
     "upright": ("robot.upright", False),
-    "side": ("robot.side", False),
+    "side": ("robot.side", True),
     "viewer": ("robot.viewer", "gui"),
     "probe": ("robot.probe", None),
     "ik": ("tuning.ik", "pybullet"),
@@ -361,14 +361,13 @@ def parse_args(argv=None):
 
     shape = ap.add_argument_group("构型与显示")
     shape.add_argument("--dual", action=argparse.BooleanOptionalAction,
-                       help="双臂（默认单臂正装）；配 --upright 为双臂正装，"
+                       help="双臂（默认单臂侧装）；配 --upright 为双臂正装，"
                             "否则双臂侧装立柱")
     shape.add_argument("--upright", action=argparse.BooleanOptionalAction,
-                       help="与 --dual 同用：双臂正装（两只独立竖直臂、无立柱）；"
-                            "不传则双臂侧装立柱")
+                       help="正装模式（单臂=单臂正装/右手柄；与 --dual 同用=双臂正装无立柱）")
     shape.add_argument("--side", action=argparse.BooleanOptionalAction,
-                       help="单臂侧装 = 单左臂（左手柄驱动、home/映射取双臂侧装左臂，"
-                            "真机走 :9001；--dual 时忽略）")
+                       help="单臂侧装 = 单左臂（默认开启；左手柄驱动、home/映射取双臂侧装左臂，"
+                            "真机走 :9001；传 --no-side 或 --upright 切单臂正装；--dual 时忽略）")
     shape.add_argument("--viewer", choices=["gui", "rviz"],
                        help="gui=pybullet 窗口 / rviz=RViz2（需 ROS2）")
     shape.add_argument("--probe", metavar="JSONL",
@@ -446,9 +445,18 @@ def resolve_options(args, cfg):
     `None`（没有 `default=`，因为本脚本要为「缺省」留出与「显式给 False/0」不同
     的含义），所以「属性为 None」就等于「没给过」。
     """
+    explicit_side = getattr(args, "side", None)
+    explicit_upright = getattr(args, "upright", None)
     for dest, (path, factory) in OPTION_PATHS.items():
         if getattr(args, dest, None) is None:
             setattr(args, dest, cfg_get(cfg, path, factory))
+    if not args.dual:
+        if explicit_upright is True and explicit_side is None:
+            args.side = False
+        elif explicit_side is True and explicit_upright is None:
+            args.upright = False
+        elif args.upright and explicit_side is not True:
+            args.side = False
     return args
 
 
@@ -483,12 +491,9 @@ def build_server_argv(args, hand_ready, gripper_ready):
         endpoints = parse_endpoints(value)
         if endpoints:
             argv += [flag, ",".join(endpoints)]
-    if args.dual:
-        argv.append("--dual")
-    if args.upright:
-        argv.append("--upright")
-    if args.side:
-        argv.append("--side")
+    argv.append("--dual" if args.dual else "--no-dual")
+    argv.append("--upright" if args.upright else "--no-upright")
+    argv.append("--side" if args.side else "--no-side")
     argv += ["--ik", args.ik,
              "--deadband-scale", str(args.deadband_scale),
              "--smooth-alpha", str(args.smooth_alpha),
@@ -545,11 +550,10 @@ def main(argv=None):
 
     mode = ("双臂正装" if (args.dual and args.upright)
             else ("双臂侧装" if args.dual
-                  else ("单臂侧装（左臂）" if args.side else "单臂正装")))
+                  else ("单臂侧装（左臂，左手柄）" if (args.side and not args.upright)
+                        else "单臂正装（右臂，右手柄）")))
     if args.dual and args.side:
         _log("[警告] 同时给了 --dual 与 --side，按双臂处理（--side 仅单臂时生效）")
-    if args.upright and not args.dual:
-        _log("[警告] --upright 仅在 --dual 时生效，已忽略（仍按单臂处理）")
 
     ip_address = wifi_ip()
     if not ip_address:

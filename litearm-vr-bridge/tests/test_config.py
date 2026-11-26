@@ -135,9 +135,10 @@ class ConfigFromEnvTest(unittest.TestCase):
             teleop.argv,
             ("python3", str(self.root / TELEOP_LAUNCHER),
              "--host", "127.0.0.1", "--port", "8766",
+             "--side",
              "--viewer", "gui",
-             # 未设置 TELEOP_ARM_HOST = 默认接本服务的 follow_server
-             "--real", "--real-right", "127.0.0.1:9001"),
+             # 默认单臂侧装占 left 槽；未设置 TELEOP_ARM_HOST = 默认接本服务的 follow_server
+             "--real", "--real-left", "127.0.0.1:9001"),
         )
         self.assertEqual(teleop.kind, KIND_TELEOP)
         self.assertEqual(teleop.probe_script, str(self.root / TELEOP_SCRIPT))
@@ -161,7 +162,8 @@ class ConfigFromEnvTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--host") + 1], "127.0.0.1")
         self.assertEqual(argv[argv.index("--port") + 1], "8766")
         self.assertEqual(argv[argv.index("--viewer") + 1], "gui")
-        self.assertNotIn("--side", argv)
+        self.assertIn("--side", argv)
+        self.assertNotIn("--upright", argv)
         self.assertNotIn("--dual", argv)
         self.assertNotIn("--ik", argv)  # 不设就用上游默认（pinocchio 微分 IK）
         self.assertNotIn("--hand", argv)
@@ -199,7 +201,31 @@ class ConfigFromEnvTest(unittest.TestCase):
         cfg = Config.from_env(self.env(TELEOP_ARM_HOST=""))
         argv = cfg.processes["teleop"].argv
         self.assertNotIn("--real", argv)
+        self.assertNotIn("--real-left", argv)
         self.assertNotIn("--real-right", argv)
+
+    def test_teleop_upright_single_arm_entry(self) -> None:
+        cfg = Config.from_env(self.env(TELEOP_UPRIGHT="1"))
+        argv = cfg.processes["teleop"].argv
+        self.assertIn("--upright", argv)
+        self.assertNotIn("--side", argv)
+        self.assertNotIn("--dual", argv)
+        self.assertEqual(argv[argv.index("--real-right") + 1], "127.0.0.1:9001")
+        self.assertNotIn("--real-left", argv)
+
+    def test_teleop_side_zero_switches_to_upright(self) -> None:
+        cfg = Config.from_env(self.env(TELEOP_SIDE="0"))
+        argv = cfg.processes["teleop"].argv
+        self.assertIn("--upright", argv)
+        self.assertNotIn("--side", argv)
+        self.assertEqual(argv[argv.index("--real-right") + 1], "127.0.0.1:9001")
+
+    def test_teleop_dual_with_teleop_upright(self) -> None:
+        cfg = Config.from_env(self.env(TELEOP_DUAL="1", TELEOP_UPRIGHT="1"))
+        argv = cfg.processes["teleop"].argv
+        self.assertIn("--dual", argv)
+        self.assertIn("--upright", argv)
+        self.assertNotIn("--side", argv)
 
     def test_real_left_override(self) -> None:
         cfg = Config.from_env(self.env(TELEOP_REAL_LEFT="127.0.0.1:9002"))
