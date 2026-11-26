@@ -25,7 +25,7 @@ DO_CHECK=1
 USE_SERVICE=auto
 LINK=auto          # auto | yes | no
 ASSUME_YES=0
-ACTION=up          # up | stop | status
+ACTION=up          # up | stop | status | check
 PY=""
 
 die() { echo "错误：$*" >&2; exit 1; }
@@ -44,6 +44,7 @@ usage() {
   --no-service   不用 systemd，就在本机后台起一个（日志与 pid 落在 logs/）
   --no-venv      不用 .venv，用系统 python3
   --no-check     跳过 --doctor 预检
+  --check-only   只跑 --doctor 预检后退出（不起桥）
   --stop         停桥
   --status       打印一帧链路快照
 EOF
@@ -58,12 +59,19 @@ while [ $# -gt 0 ]; do
     --no-service) USE_SERVICE=no; shift ;;
     --no-venv)    USE_VENV=0; shift ;;
     --no-check)   DO_CHECK=0; shift ;;
+    --check-only) ACTION=check; shift ;;
     --stop)       ACTION=stop; shift ;;
     --status)     ACTION=status; shift ;;
     -h|--help)    usage; exit 0 ;;
     *)            die "未知参数：$1（-h 看用法）" ;;
   esac
 done
+
+# --check-only 要求"跑预检后退出"，--no-check 要求"跳过预检" —— 两者叠加
+# 会什么都不检查就返回 0，脚本里看着"预检通过"其实什么都没跑，所以直接拒。
+if [ "$ACTION" = check ] && [ "$DO_CHECK" = 0 ]; then
+  die "--check-only 与 --no-check 互相矛盾：前者要跑预检，后者跳过预检。只保留一个。"
+fi
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
 
@@ -212,6 +220,11 @@ if [ "$DO_CHECK" = 1 ]; then
   if ! bridge --doctor; then
     die "预检有 FAIL，先修好再启动（或者 --no-check 跳过，但你知道自己在做什么）"
   fi
+fi
+
+if [ "$ACTION" = check ]; then
+  note 预检 "完成（--check-only），未启动桥"
+  exit 0
 fi
 
 # ── 起桥 ────────────────────────────────────────────────────────────────────

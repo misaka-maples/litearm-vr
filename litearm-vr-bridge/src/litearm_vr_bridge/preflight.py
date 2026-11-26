@@ -158,12 +158,17 @@ def _connect_ok(host: str, port: int, timeout: float = 0.3) -> bool:
 
 
 def _health_json(host: str, port: int, timeout: float = 1.0) -> dict | None:
-    """直接发一条 HTTP/1.0 GET，不依赖 urllib 的重定向/异常链。"""
+    """直接发一条 HTTP/1.1 GET，不依赖 urllib 的重定向/异常链。
+
+    必须是 1.1：`/healthz` 跑在 websockets 的 `process_request` 上，它的解析器
+    按 RFC 6455 只认 HTTP/1.1 —— 发 1.0 会连响应都没有直接断开，于是"桥明明在跑"
+    被报成"端口被别的程序占用"。
+    """
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
             sock.settimeout(timeout)
             sock.sendall(
-                f"GET /healthz HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode()
+                f"GET /healthz HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n".encode()
             )
             chunks: list[bytes] = []
             while True:
@@ -420,6 +425,12 @@ def _check_zenoh_port(cfg: Config, world: Probes) -> Check:
     probe_host = "127.0.0.1" if host in ("0.0.0.0", "::", "", "*") else host
     if world.bind_ok(probe_host, port):
         return Check("zenoh_port", OK, f"{host}:{port} 可用")
+    health = world.health(_client_host(cfg.bridge_host), cfg.bridge_port) or {}
+    if _looks_like_bridge(health) and (health.get("zenoh") or {}).get("ready"):
+        return Check(
+            "zenoh_port", OK,
+            f"{host}:{port} 由本服务监听（已在运行）",
+        )
     return Check(
         "zenoh_port",
         FAIL,
