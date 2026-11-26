@@ -43,6 +43,18 @@ class ParseFrameTest(unittest.TestCase):
         self.assertTrue(parse_frame(json.dumps({"rightController": {"gripActive": 1}})).grip)
         self.assertFalse(parse_frame(json.dumps({"rightController": {"gripActive": 0}})).grip)
 
+    def test_left_controller_grip_and_tracked_supported(self) -> None:
+        info = parse_frame(
+            json.dumps(
+                {
+                    "leftController": {"tracked": True, "gripActive": True},
+                    "rightController": {"tracked": False, "gripActive": False},
+                }
+            )
+        )
+        self.assertTrue(info.grip)
+        self.assertTrue(info.tracked)
+
     def test_bad_json_is_tolerated(self) -> None:
         info = parse_frame("not json at all")
         self.assertIsNone(info.ts_ms)

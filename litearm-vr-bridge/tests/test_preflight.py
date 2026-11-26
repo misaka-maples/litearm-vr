@@ -233,21 +233,21 @@ class PreflightTest(unittest.TestCase):
 
     def test_flag_contract_lists_what_we_pass(self) -> None:
         check = find(self.run_checks(), "flags:teleop")
-        for flag in ("--host", "--port", "--viewer", "--real", "--real-right"):
+        for flag in ("--host", "--port", "--side", "--viewer", "--real", "--real-left"):
             self.assertIn(flag, check.detail)
 
     def test_flag_contract_catches_renamed_flag(self) -> None:
-        """上游把 --real / --real-right 改名了：我们传的就是白传，真机不会动。"""
+        """上游把 --real / --real-left 改名了：我们传的就是白传，真机不会动。"""
         self.write_repo(
             launcher=TELEOP_LAUNCHER_SRC.replace('"--real", ', "")
-            .replace('p.add_argument("--real-right")', 'p.add_argument("--arm-right")')
+            .replace('p.add_argument("--real-left")', 'p.add_argument("--arm-left")')
         )
         check = find(self.run_checks(), "flags:teleop")
         self.assertEqual(check.status, WARN)
         self.assertIn("--real", check.detail)
-        self.assertIn("--real-right", check.detail)
-        # 只认整个词：--real-left 不该被当成 --real 的替身
-        self.assertNotIn("--real-left", check.detail)
+        self.assertIn("--real-left", check.detail)
+        # 只认整个词：--real-right 不该被当成 --real 的替身
+        self.assertNotIn("--real-right", check.detail)
 
     def test_flag_contract_choice_mismatch_is_flagged(self) -> None:
         """stm32 的 --mode 只认 jf/j，而本服务默认传 js。"""

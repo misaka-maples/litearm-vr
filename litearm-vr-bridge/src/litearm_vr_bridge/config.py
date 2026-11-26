@@ -431,12 +431,20 @@ def _launcher_argv(env: dict[str, str], cfg: Config, teleop_dir: Path) -> list[s
     if server_py:
         argv += ["--metavr-py", server_py]
 
-    # 构型：上游默认单臂正装；当前真机是单臂水平侧装，所以每次都讲清楚
-    if _bool(env, "TELEOP_DUAL", False):
+    # 构型：默认单臂水平侧装（左臂，左手柄驱动）；
+    # 设 TELEOP_UPRIGHT=1 或 TELEOP_SIDE=0 切到单臂正装（右臂，右手柄驱动）；
+    # 设 TELEOP_DUAL=1 切到双臂（配 TELEOP_UPRIGHT=1 或 TELEOP_DUAL_UPRIGHT=1 为双臂正装）。
+    dual = _bool(env, "TELEOP_DUAL", False)
+    upright = _bool(env, "TELEOP_UPRIGHT", False)
+    dual_upright = upright or _bool(env, "TELEOP_DUAL_UPRIGHT", False)
+    single_upright = not dual and (upright or not _bool(env, "TELEOP_SIDE", True))
+    if dual:
         argv.append("--dual")
-        if _bool(env, "TELEOP_DUAL_UPRIGHT", False):
+        if dual_upright:
             argv.append("--upright")
-    elif _bool(env, "TELEOP_SIDE", False):
+    elif single_upright:
+        argv.append("--upright")
+    else:
         argv.append("--side")
 
     argv += ["--viewer", _viewer(env)]
@@ -447,10 +455,15 @@ def _launcher_argv(env: dict[str, str], cfg: Config, teleop_dir: Path) -> list[s
 
     # 真机桥接：显式留空 TELEOP_ARM_HOST = 只跑仿真；未设置 = 默认接本服务的 follow_server
     arm_host = _arm_host(env, cfg)
-    if arm_host:
-        # 单臂侧装时仿真里的臂名就是 right（teleop_sim），真机挂在这条上
-        argv += ["--real", "--real-right", arm_host]
     real_left = (env.get("TELEOP_REAL_LEFT") or "").strip()
+    if arm_host:
+        if not dual and not single_upright:
+            # 单臂侧装占 left 槽（左手柄驱动），真机挂在 --real-left 上
+            argv += ["--real", "--real-left", real_left or arm_host]
+            real_left = ""
+        else:
+            # 单臂正装 / 双臂右臂占 right 槽，真机挂在 --real-right 上
+            argv += ["--real", "--real-right", arm_host]
     if real_left:
         argv += ["--real-left", real_left]
 

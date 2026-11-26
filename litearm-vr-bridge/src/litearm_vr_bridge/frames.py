@@ -43,12 +43,12 @@ class FrameInfo:
 
     @property
     def grip(self) -> bool:
-        """右手是否握着 grip（握把键按下且被跟踪）——遥操的"发令"信号。"""
-        return bool(self.right and self.right.tracked and self.right.grip)
+        """任一手柄是否握着 grip（握把键按下且被跟踪）——单臂侧装用左手、正装用右手、双臂均可。"""
+        return any(bool(c and c.tracked and c.grip) for c in (self.right, self.left))
 
     @property
     def tracked(self) -> bool:
-        return bool(self.right and self.right.tracked)
+        return any(bool(c and c.tracked) for c in (self.right, self.left))
 
 
 def parse_frame(raw: str) -> FrameInfo:

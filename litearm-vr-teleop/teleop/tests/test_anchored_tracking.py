@@ -415,6 +415,25 @@ class AnchoredTrackingTests(unittest.TestCase):
         self.assertFalse(arm.is_homing())
         np.testing.assert_allclose(arm._get_q(), arm._home, atol=1e-4)
 
+    def test_pybullet_ik_pure_rotation_converges_without_position_drift(self):
+        _, arm = self.make(backend="pybullet")
+        pos0, quat0 = arm._eef_pose()
+        R0 = R.from_quat(quat0).as_matrix()
+        Rd = R0 @ R.from_rotvec([np.deg2rad(15.0), 0.0, 0.0]).as_matrix()
+        info = {}
+        _, ok = arm.ik(pos0, Rd, info=info)
+        self.assertTrue(ok)
+        self.assertLess(info["err_pos"], 0.002)
+        self.assertLess(info["err_rot"], 0.01)
+
+    def test_single_side_and_single_upright_override(self):
+        sim_side = LiteArmTeleopSim(viewer="rviz", side=True)
+        self.sims.append(sim_side)
+        self.assertEqual(list(sim_side.arms().keys()), ["left"])
+        sim_up = LiteArmTeleopSim(viewer="rviz", side=True, upright=True)
+        self.sims.append(sim_up)
+        self.assertEqual(list(sim_up.arms().keys()), ["right"])
+
 
 if __name__ == "__main__":
     unittest.main()

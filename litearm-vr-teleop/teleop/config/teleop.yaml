@@ -70,13 +70,16 @@ env:
 # 构型与显示
 # -----------------------------------------------------------------------------
 robot:
-  dual: false            # true = 双臂侧装立柱（加载 dual_litearm_column.urdf）；false = 单臂
-  # 单臂侧装 = 只接一只**左**臂（水平侧装，LiteArm 侧装姿态）。语义与它在双臂侧装里
-  # 的那只完全一致：占 left 槽（左手柄驱动、真机走 :9001）、home/映射取双臂侧装左臂。
-  # ⚠ dual=true 时忽略（该走下面 upright）。
-  side: false
-  # 仅 dual=true 时有意义：true = 双臂正装（两只独立竖直臂、无立柱）；
-  # false = 双臂侧装立柱。正装与侧装末端朝向差 90°，故 home 与轴映射都各有一套。
+  dual: false            # true = 双臂立柱（加载 dual_litearm_column.urdf）；false = 单臂（默认单臂侧装）
+  # 单臂默认水平侧装（true）：只接一只**左**臂（LiteArm 侧装姿态），占 left 槽
+  # （左手柄驱动、真机走 :9001）、home/映射取双臂侧装左臂。
+  # 切到单臂正装：设 side: false 或 upright: true，或命令行传 --upright / --no-side。
+  # ⚠ dual=true 时忽略 side（由下面 upright 决定双臂侧装还是双臂正装）。
+  side: true
+  # 正装开关（单臂/双臂通用）：
+  #   dual=false + upright=true  → 单臂正装（竖直，占 right 槽，右手柄驱动）
+  #   dual=true  + upright=true  → 双臂正装（两只独立竖直臂、无立柱）
+  #   dual=true  + upright=false → 双臂侧装立柱
   upright: false
   viewer: gui            # gui = pybullet 3D 窗口（不依赖 ROS2） | rviz = RViz2（需 ROS2 humble）
   # 数据探针：把每帧各阶段的量写成 JSONL（诊断关节跳变/死区/奇异用，见 scripts/probe.py）。
@@ -145,8 +148,8 @@ tracking:
   stall_timeout: 5.0           # s，误差长期不下降标记为受限，继续求解，目标可达后自动恢复
   position_tolerance: 0.001    # m，收敛判定，非手柄死区
   rotation_tolerance: 0.01     # rad
-  max_joint_velocity: 2.0      # rad/s，实际控制周期约束（与跟随端 slew 2.0rad/s 对齐，2026-10-30 由 3.5 下调）
-  max_joint_acceleration: 12.0 # rad/s²，提升起步加速度
+  max_joint_velocity: 6.0      # rad/s，控制周期关节速度上限（真机由跟随服务自身 slew 二次限速）
+  max_joint_acceleration: 60.0 # rad/s²，控制周期关节加速度上限（降低流式跟踪刹停滞后）
   max_linear_velocity: 1.5     # m/s，IK中间参考限速（放开到1.5m/s匹配正常挥手）
   max_angular_velocity: 8.0    # rad/s，放开到8.0rad/s（约460°/s匹配腕部翻转）
   hand_jump_position: 0.15     # m，超过此跳变阈值的样本需下一连续样本确认，不锁停

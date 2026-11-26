@@ -597,10 +597,12 @@ async def main(host, port, dual, side, use_ros, viewer, ik, real, real_left, rea
                           hand=hand_ctrl, gripper=gripper_ctrl,
                           **(controller_kwargs or {}))
 
+    effective_side = bool(side) and not bool(upright)
     print("遥操仿真已就绪（显示=%s，%s）"
           % (viewer, "双臂正装" if (dual and upright)
              else ("双臂侧装" if dual
-                   else ("单臂侧装（左臂）" if side else "单臂正装"))))
+                   else ("单臂侧装（左臂，左手柄）" if effective_side
+                         else "单臂正装（右臂，右手柄）"))))
 
     control_task = asyncio.create_task(_control_loop(bridge))
     try:
@@ -714,15 +716,14 @@ def _build_parser():
     ap.add_argument("--port", type=int, default=argparse.SUPPRESS)
     ap.add_argument("--dual", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
-                    help="加载双臂 URDF（默认单臂正装）；配 --upright 为双臂正装")
+                    help="加载双臂 URDF（默认单臂侧装）；配 --upright 为双臂正装")
     ap.add_argument("--upright", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
-                    help="与 --dual 同用：双臂正装（两只独立竖直臂、无立柱）；"
-                         "不传则双臂侧装立柱")
+                    help="正装模式（单臂=单臂正装/右手柄；与 --dual 同用=双臂正装无立柱）")
     ap.add_argument("--side", action=argparse.BooleanOptionalAction,
                     default=argparse.SUPPRESS,
-                    help="单臂侧装 = 单左臂（左手柄驱动、home/映射取双臂侧装左臂，"
-                         "真机走 :9001）")
+                    help="单臂侧装 = 单左臂（默认开启；左手柄驱动、home/映射取双臂侧装左臂，"
+                         "真机走 :9001；传 --no-side 或 --upright 切单臂正装）")
     ap.add_argument("--viewer", choices=["gui", "rviz"], default=argparse.SUPPRESS,
                     help="显示后端：gui=pybullet 窗口（默认）/ rviz=RViz2")
     ap.add_argument("--ik", choices=["pin", "pybullet", "exact"],
@@ -835,6 +836,11 @@ def _merge_args(cfg_data, args):
     for dest, path in _OPTION_PATHS.items():
         if hasattr(args, dest):
             set_path(cfg_data, path, getattr(args, dest))
+    if not bool(get(cfg_data, "robot.dual", False)):
+        if getattr(args, "upright", None) is True and not hasattr(args, "side"):
+            set_path(cfg_data, "robot.side", False)
+        elif getattr(args, "side", None) is True and not hasattr(args, "upright"):
+            set_path(cfg_data, "robot.upright", False)
     return cfg_data
 
 
@@ -863,12 +869,15 @@ if __name__ == "__main__":
         probe = JsonlWriter(probe_path)
         print("数据探针已启用 → %s（诊断用，正常遥操请勿开）" % probe_path)
 
+    _dual = bool(C("robot.dual", False))
+    _upright = bool(C("robot.upright", False))
+    _side = bool(C("robot.side", True)) and not _upright
     asyncio.run(main(
         C("server.host", "0.0.0.0"), int(C("server.port", 8765)),
-        bool(C("robot.dual", False)), bool(C("robot.side", False)),
+        _dual, _side,
         use_ros=bool(C("server.publish_ros", True)),
         viewer=C("robot.viewer", "gui"), ik=C("tuning.ik", "pybullet"),
-        upright=bool(C("robot.upright", False)),
+        upright=_upright,
         source=C("vr.source", DEFAULT_SOURCE),
         arm_id=C("vr.arm_id", DEFAULT_ARM_ID),
         zenoh_mode=C("vr.zenoh_mode", DEFAULT_ZENOH_MODE),

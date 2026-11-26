@@ -814,7 +814,8 @@ def _check_real_arm(cfg: Config) -> Check:
         return Check("real_arm", INFO, "未托管 teleop，未知是否接真机")
     if not cfg.real_arm:
         return Check("real_arm", INFO, "teleop 只跑仿真，不会碰真机")
-    target = _value_of(list(spec.argv), "--real-right") or cfg.follow_endpoint
+    argv = list(spec.argv)
+    target = _value_of(argv, "--real-left") or _value_of(argv, "--real-right") or cfg.follow_endpoint
     return Check(
         "real_arm", WARN, f"teleop 接真机：--real → {target}",
         "首次按 grip 会 movej 回 q_home 并跟随真机；确认已上电、工作区无人、急停在手",
